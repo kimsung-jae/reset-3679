@@ -22,7 +22,8 @@ public final class ResetCore {
     public static final String[] COMBO={"","좌3짝","좌4홀","우3홀","우4짝"};
     public static final String[] DIM={"좌/우","사다리수","홀/짝"};
     private static final int[][] VEC={{0,0,0},{+1,+1,-1},{+1,-1,+1},{-1,+1,+1},{-1,-1,-1}};
-    public static final String K_MASTER="master_history",K_AUTO="auto",K_BASE_STAKE="base_stake",K_ODDS="odds",K_LAST_LATEST="last_latest",K_SNAPSHOT="snapshot_size",K_LAST_SYNC="last_sync";
+    public static final String K_MASTER="master_history",K_AUTO="auto",K_BASE_STAKE="base_stake",K_ODDS="odds",K_LAST_LATEST="last_latest",K_SNAPSHOT="snapshot_size",K_LAST_SYNC="last_sync",K_LAST_API_ROUND="last_api_round",K_LAST_API_DATE="last_api_date",K_LAST_NEW_ROUND_AT="last_new_round_at";
+    private static final Object SYNC_LOCK=new Object();
 
     public static SharedPreferences prefs(Context c){return c.getSharedPreferences(PREF,Context.MODE_PRIVATE);}
     private static String eh(int i){return "engine_hist_"+i;}
@@ -68,16 +69,46 @@ public final class ResetCore {
     public static List<Result> recentDesc(List<Result>d,int n){List<Result>x=new ArrayList<>(d);x.sort((a,b)->Long.compare(b.idx,a.idx));return x.size()>n?new ArrayList<>(x.subList(0,n)):x;}
 
     public static SyncResult sync(Context c)throws Exception{
-        SharedPreferences sp=prefs(c);List<Result> fresh=fetch();long latest=fresh.get(0).idx;long prev=sp.getLong(K_LAST_LATEST,-1);boolean first=prev<=0;boolean newRound=!first&&latest!=prev;
-        List<Result> master=merge(loadList(sp,K_MASTER),fresh);saveList(sp,K_MASTER,master);
-        sp.edit().putInt(K_SNAPSHOT,fresh.size()).putLong(K_LAST_LATEST,latest).putLong(K_LAST_SYNC,System.currentTimeMillis()).apply();
-        for(int i=0;i<INTERVAL.length;i++){
-            List<Result> hist=loadList(sp,eh(i));if(first||hist.isEmpty())hist=new ArrayList<>(fresh);
-            if(newRound){resolvePending(sp,i,fresh);if(i==0){hist=new ArrayList<>(master);}else{int count=sp.getInt(ec(i),0)+1;if(count>=INTERVAL[i]){hist=new ArrayList<>(fresh);count=0;sp.edit().putInt(er(i),sp.getInt(er(i),0)+1).apply();}else hist=merge(hist,fresh);sp.edit().putInt(ec(i),count).apply();}}
-            else if(i==0)hist=new ArrayList<>(master);
-            saveList(sp,eh(i),hist);Analysis a=analyze(hist);savePending(sp,i,hist,a);
+        synchronized(SYNC_LOCK){
+            SharedPreferences sp=prefs(c);
+            List<Result> fresh=fetch();
+            Result newest=fresh.get(0);
+            long latest=newest.idx;
+            long prev=sp.getLong(K_LAST_LATEST,-1);
+            boolean first=prev<=0;
+            boolean newRound=!first&&latest!=prev;
+            List<Result> master=merge(loadList(sp,K_MASTER),fresh);
+            saveList(sp,K_MASTER,master);
+            SharedPreferences.Editor meta=sp.edit()
+                    .putInt(K_SNAPSHOT,fresh.size())
+                    .putLong(K_LAST_LATEST,latest)
+                    .putLong(K_LAST_SYNC,System.currentTimeMillis())
+                    .putInt(K_LAST_API_ROUND,newest.round)
+                    .putString(K_LAST_API_DATE,newest.date);
+            if(newRound)meta.putLong(K_LAST_NEW_ROUND_AT,System.currentTimeMillis());
+            meta.apply();
+            for(int i=0;i<INTERVAL.length;i++){
+                List<Result> hist=loadList(sp,eh(i));
+                if(first||hist.isEmpty())hist=new ArrayList<>(fresh);
+                if(newRound){
+                    resolvePending(sp,i,fresh);
+                    if(i==0){hist=new ArrayList<>(master);}
+                    else{
+                        int count=sp.getInt(ec(i),0)+1;
+                        if(count>=INTERVAL[i]){
+                            hist=new ArrayList<>(fresh);
+                            count=0;
+                            sp.edit().putInt(er(i),sp.getInt(er(i),0)+1).apply();
+                        }else hist=merge(hist,fresh);
+                        sp.edit().putInt(ec(i),count).apply();
+                    }
+                }else if(i==0)hist=new ArrayList<>(master);
+                saveList(sp,eh(i),hist);
+                Analysis a=analyze(hist);
+                savePending(sp,i,hist,a);
+            }
+            SyncResult sr=new SyncResult();sr.newRound=newRound;sr.latest=latest;sr.snapshotSize=fresh.size();sr.master=master;sr.engines=views(c);return sr;
         }
-        SyncResult sr=new SyncResult();sr.newRound=newRound;sr.latest=latest;sr.snapshotSize=fresh.size();sr.master=master;sr.engines=views(c);return sr;
     }
 
     public static EngineView[] views(Context c){SharedPreferences sp=prefs(c);EngineView[] out=new EngineView[INTERVAL.length];for(int i=0;i<out.length;i++){List<Result> h=loadList(sp,eh(i));EngineView v=new EngineView();v.id=i;v.interval=INTERVAL[i];v.counter=sp.getInt(ec(i),0);v.resets=sp.getInt(er(i),0);v.total=sp.getInt(pn(i),0);v.hit=sp.getInt(ph(i),0);v.profit=Double.longBitsToDouble(sp.getLong(pp(i),Double.doubleToLongBits(0)));int[] rr=recentRecord(sp,i,20);v.recent20Hit=rr[0];v.recent20N=rr[1];v.dataSize=h.size();v.analysis=h.isEmpty()?null:analyze(h);out[i]=v;}return out;}

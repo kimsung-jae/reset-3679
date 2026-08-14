@@ -10,8 +10,8 @@ android {
         applicationId "com.bubbleladder.resetlabv432"
         minSdk 24
         targetSdk 34
-        versionCode 1
-        versionName "4.3.2-reset-lab"
+        versionCode 2
+        versionName "4.3.3-sync-watch"
     }
 
     compileOptions {
